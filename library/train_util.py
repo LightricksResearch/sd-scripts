@@ -3319,9 +3319,11 @@ def read_config_from_file(args: argparse.Namespace, parser: argparse.ArgumentPar
         for key, value in section_dict.items():
             ignore_nesting_dict[key] = value
 
-    config_args = argparse.Namespace(**ignore_nesting_dict)
-    args = parser.parse_args(namespace=config_args)
-    args.config_file = os.path.splitext(args.config_file)[0]
+    # config_args = argparse.Namespace(**ignore_nesting_dict)
+    # new_args = parser.parse_args(namespace=config_args)
+    # args.config_file = os.path.splitext(args.config_file)[0]
+    for key, value in ignore_nesting_dict.items():
+        setattr(args, key, value)
     print(args.config_file)
 
     return args
