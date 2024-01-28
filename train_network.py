@@ -130,7 +130,7 @@ class NetworkTrainer:
     def sample_images(self, accelerator, args, epoch, global_step, device, vae, tokenizer, text_encoder, unet):
         train_util.sample_images(accelerator, args, epoch, global_step, device, vae, tokenizer, text_encoder, unet)
 
-    def train(self, args, progress_update):
+    def train(self, args, progress_update, virtual_cache):
         session_id = random.randint(0, 2**32)
         training_started_at = time.time()
         train_util.verify_training_args(args)
@@ -193,6 +193,8 @@ class NetworkTrainer:
         else:
             # use arbitrary dataset class
             train_dataset_group = train_util.load_arbitrary_dataset(args, tokenizer)
+
+        train_dataset_group.datasets[0].virtual_cache = virtual_cache
 
         current_epoch = Value("i", 0)
         current_step = Value("i", 0)
