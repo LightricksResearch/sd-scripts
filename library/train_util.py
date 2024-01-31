@@ -1109,12 +1109,11 @@ class BaseDataset(torch.utils.data.Dataset):
 
                 image = None
             elif image_info.image_key in self.virtual_cache:  # virtual cache
-                latents, original_size, crop_ltrb, flipped_latents = load_latents_from_virtual_cache(self.virtual_cache, image_info.image_key)
-                if flipped:
-                    latents = flipped_latents
-                    del flipped_latents
-                latents = torch.FloatTensor(latents)
-
+                latents, original_size, crop_ltrb = load_latents_from_virtual_cache(
+                    self.virtual_cache,
+                    image_info.image_key,
+                    flipped
+                )
                 image = None
                 
             elif image_info.latents_npz is not None:  # FineTuningDatasetまたはcache_latents_to_disk=Trueの場合
@@ -1998,23 +1997,27 @@ def save_latents_to_disk(npz_path, latents_tensor, original_size, crop_ltrb, fli
     )
     
 def load_latents_from_virtual_cache(
-    virtual_cache, image_key
+    virtual_cache, image_key, flipped: bool = False,
 ) -> Tuple[Optional[torch.Tensor], Optional[List[int]], Optional[List[int]], Optional[torch.Tensor]]:
-    latents = virtual_cache[image_key]["latents"]
-    original_size = virtual_cache[image_key]["original_size"].tolist()
-    crop_ltrb = virtual_cache[image_key]["crop_ltrb"].tolist()
-    flipped_latents = virtual_cache[image_key]["latents_flipped"] if "latents_flipped" in virtual_cache[image_key] else None
-    return latents, original_size, crop_ltrb, flipped_latents
+    original_size = virtual_cache[image_key]["original_size"]
+    crop_ltrb = virtual_cache[image_key]["crop_ltrb"]
+    
+    if flipped and "latents_flipped" in virtual_cache[image_key]:
+        latents = virtual_cache[image_key]["latents_flipped"]
+    else:
+        latents = virtual_cache[image_key]["latents"]
+    
+    return latents, original_size, crop_ltrb
 
 
 def save_latents_to_virtual_cache(virtual_cache, image_key, latents_tensor, original_size, crop_ltrb, flipped_latents_tensor=None):
     virtual_cache[image_key] = {
-        "latents": latents_tensor.float().cpu().numpy(),
-        "original_size": np.array(original_size),
-        "crop_ltrb": np.array(crop_ltrb),
+        "latents": latents_tensor,
+        "original_size": original_size,
+        "crop_ltrb": crop_ltrb,
     }
     if flipped_latents_tensor is not None:
-        virtual_cache[image_key]["latents_flipped"] = flipped_latents_tensor.float().cpu().numpy()
+        virtual_cache[image_key]["latents_flipped"] = flipped_latents_tensor
 
 
 def debug_dataset(train_dataset, show_input_ids=False):
