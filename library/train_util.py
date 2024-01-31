@@ -145,6 +145,7 @@ class ImageInfo:
         self.text_encoder_outputs1: Optional[torch.Tensor] = None
         self.text_encoder_outputs2: Optional[torch.Tensor] = None
         self.text_encoder_pool2: Optional[torch.Tensor] = None
+        self.in_virtual_cache: bool = False
 
 
 class BucketManager:
@@ -884,6 +885,9 @@ class BaseDataset(torch.utils.data.Dataset):
 
         # sort by resolution
         image_infos.sort(key=lambda info: info.bucket_reso[0] * info.bucket_reso[1])
+        
+        # check if this instance have a "virtual_cache" attribute:
+        virtual_cache_exists = hasattr(self, "virtual_cache")
 
         # split by resolution
         batches = []
@@ -904,6 +908,10 @@ class BaseDataset(torch.utils.data.Dataset):
                 cache_available = is_disk_cached_latents_is_expected(info.bucket_reso, info.latents_npz, subset.flip_aug)
 
                 if cache_available:  # do not add to batch
+                    continue
+            elif virtual_cache_exists:
+                # check if virtual cache exists
+                if info.image_key in self.virtual_cache:
                     continue
 
             # if last member of batch has different resolution, flush the batch
@@ -927,7 +935,7 @@ class BaseDataset(torch.utils.data.Dataset):
         # iterate batches: batch doesn't have image, image will be loaded in cache_batch_latents and discarded
         print("caching latents...")
         for batch in tqdm(batches, smoothing=1, total=len(batches)):
-            cache_batch_latents(vae, cache_to_disk, batch, subset.flip_aug, subset.random_crop)
+            cache_batch_latents(vae, cache_to_disk, batch, subset.flip_aug, subset.random_crop, self.virtual_cache)
 
     # weight_dtypeを指定するとText Encoderそのもの、およひ出力がweight_dtypeになる
     # SDXLでのみ有効だが、datasetのメソッドとする必要があるので、sdxl_train_util.pyではなくこちらに実装する
@@ -1100,6 +1108,14 @@ class BaseDataset(torch.utils.data.Dataset):
                     latents = image_info.latents_flipped
 
                 image = None
+            elif image_info.image_key in self.virtual_cache:  # virtual cache
+                latents, original_size, crop_ltrb = load_latents_from_virtual_cache(
+                    self.virtual_cache,
+                    image_info.image_key,
+                    flipped
+                )
+                image = None
+                
             elif image_info.latents_npz is not None:  # FineTuningDatasetまたはcache_latents_to_disk=Trueの場合
                 latents, original_size, crop_ltrb, flipped_latents = load_latents_from_disk(image_info.latents_npz)
                 if flipped:
@@ -1979,6 +1995,29 @@ def save_latents_to_disk(npz_path, latents_tensor, original_size, crop_ltrb, fli
         crop_ltrb=np.array(crop_ltrb),
         **kwargs,
     )
+    
+def load_latents_from_virtual_cache(
+    virtual_cache, image_key, flipped: bool = False,
+) -> Tuple[Optional[torch.Tensor], Optional[List[int]], Optional[List[int]], Optional[torch.Tensor]]:
+    original_size = virtual_cache[image_key]["original_size"]
+    crop_ltrb = virtual_cache[image_key]["crop_ltrb"]
+    
+    if flipped and "latents_flipped" in virtual_cache[image_key]:
+        latents = virtual_cache[image_key]["latents_flipped"]
+    else:
+        latents = virtual_cache[image_key]["latents"]
+    
+    return latents, original_size, crop_ltrb
+
+
+def save_latents_to_virtual_cache(virtual_cache, image_key, latents_tensor, original_size, crop_ltrb, flipped_latents_tensor=None):
+    virtual_cache[image_key] = {
+        "latents": latents_tensor,
+        "original_size": original_size,
+        "crop_ltrb": crop_ltrb,
+    }
+    if flipped_latents_tensor is not None:
+        virtual_cache[image_key]["latents_flipped"] = flipped_latents_tensor
 
 
 def debug_dataset(train_dataset, show_input_ids=False):
@@ -2197,7 +2236,7 @@ def trim_and_resize_if_required(
 
 
 def cache_batch_latents(
-    vae: AutoencoderKL, cache_to_disk: bool, image_infos: List[ImageInfo], flip_aug: bool, random_crop: bool
+    vae: AutoencoderKL, cache_to_disk: bool, image_infos: List[ImageInfo], flip_aug: bool, random_crop: bool, virtual_cache:dict = None
 ) -> None:
     r"""
     requires image_infos to have: absolute_path, bucket_reso, resized_size, latents_npz
@@ -2239,6 +2278,9 @@ def cache_batch_latents(
 
         if cache_to_disk:
             save_latents_to_disk(info.latents_npz, latent, info.latents_original_size, info.latents_crop_ltrb, flipped_latent)
+        elif virtual_cache is not None and "prior_preservation" in info.absolute_path:
+            save_latents_to_virtual_cache(virtual_cache, info.image_key, latent, info.latents_original_size, info.latents_crop_ltrb, flipped_latent)
+            info.in_virtual_cache = True
         else:
             info.latents = latent
             if flip_aug:
